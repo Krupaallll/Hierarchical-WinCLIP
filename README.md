@@ -1,100 +1,59 @@
-# WinCLIP: Zero-/Few-Shot Anomaly Classification and Segmentation
-<p align="center"><img src="assets/teaser.jpg" alt="outline" width="90%"></p>
-Unofficial implementation of:
+# Hierarchical WinCLIP: Coarse-to-Fine Sliding Windows for Faster Zero-Shot Anomaly Detection
 
-WinCLIP: Zero-/Few-Shot Anomaly Classification and Segmentation, CVPR 2023 [[Paper]](https://openaccess.thecvf.com/content/CVPR2023/html/Jeong_WinCLIP_Zero-Few-Shot_Anomaly_Classification_and_Segmentation_CVPR_2023_paper.html)
+This project builds on the WinCLIP paper (*WinCLIP: Zero-/Few-Shot Anomaly Classification and Segmentation*, CVPR 2023) and the PyTorch implementation from [caoyunkang/WinClip](https://github.com/caoyunkang/WinClip) to address WinCLIP's main practical bottleneck: **high inference latency from exhaustive multi-scale sliding windows**.
 
+## The Limitation
+Standard WinCLIP runs stride-1 sliding windows at 2x2 and 3x3 patch scales across the entire 15x15 ViT patch grid (**365 windows per image**). Scanning every background and normal region makes inference slow (~199 ms/image on a T4 GPU, ~5 FPS).
 
-## Citation
-If you find the code useful, please consider citing our paper using the following BibTeX entry.
-```
-@InProceedings{Jeong_2023_CVPR,
-    author    = {Jeong, Jongheon and Zou, Yang and Kim, Taewan and Zhang, Dongqing and Ravichandran, Avinash and Dabeer, Onkar},
-    title     = {WinCLIP: Zero-/Few-Shot Anomaly Classification and Segmentation},
-    booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
-    month     = {June},
-    year      = {2023},
-    pages     = {19606-19616}
-}
-```
+## Our Improvement: Hierarchical Coarse-to-Fine Sliding Windows
+Implemented in `WinCLIP/hierarchical.py`, our method preserves WinCLIP's exact CLIP backbone (`ViT-B-16-plus-240`), Compositional Prompt Ensemble, and harmonic score aggregation while replacing exhaustive scanning with a 3-stage hierarchy (4x4 -> 3x3 -> 2x2):
 
-## Related Research
-```
-@misc{cao2023segment,
-      title={Segment Any Anomaly without Training via Hybrid Prompt Regularization}, 
-      author={Yunkang Cao and Xiaohao Xu and Chen Sun and Yuqi Cheng and Zongwei Du and Liang Gao and Weiming Shen},
-      year={2023},
-      eprint={2305.10724},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV}
-}
-```
+1. **Stage 1 (4x4, stride 2):** Runs a fast coarse scan across the image to locate suspicious regions.
+2. **Stage 2 (3x3, top 50%):** Evaluates only the top 50% highest-scoring candidate windows from Stage 1.
+3. **Stage 3 (2x2, top 35%):** Zooms in only on the top 35% hottest regions to sharpen defect boundaries.
 
-## Related Repo
+This reduces the number of evaluated windows from **365 to 201 (-45%)** and batches each stage cleanly on the GPU.
 
-- [Segment Any Anomaly](https://github.com/caoyunkang/Segment-Any-Anomaly) 
+## Benchmark Results (MVTec-AD, Zero-Shot, T4 GPU)
 
-## Prerequisite
-* Python 3.7, PyTorch 1.10, and more in install.sh
+| Class | Orig Latency (ms) | Hier Latency (ms) | Speedup | Orig Image AUROC | Hier Image AUROC | Orig Pixel AUROC | Hier Pixel AUROC |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **bottle** | 210.50 | 62.56 | 3.36x | 98.97% | 98.89% | 90.00% | 88.21% |
+| **wood** | 194.52 | 62.89 | 3.09x | 92.11% | 94.04% | 90.10% | 87.52% |
+| **tile** | 194.17 | 63.08 | 3.08x | 75.79% | 72.51% | 71.37% | 69.33% |
+| **hazelnut** | 197.70 | 64.55 | 3.06x | 74.25% | 74.50% | 96.18% | 95.80% |
+| **MEAN** | **199.22** | **63.27** | **3.15x** | **85.28%** | **84.99%** | **86.91%** | **85.22%** |
 
-#### Install python dependencies
-```
-sh install.sh
-```
+* **Speed:** **3.15x faster** on average (**5.0 FPS -> 15.8 FPS**).
+* **Accuracy Trade-off:** Only **-0.29%** Image AUROC and **-1.70%** Pixel AUROC drop across the 4 benchmark classes.
 
+### Speed & Accuracy Comparison
+![Benchmark Chart](results/benchmark_chart.png)
 
-#### Download MVTec-AD dataset
-* Follow instructions in https://www.mvtec.com/company/research/datasets/mvtec-ad/
+### Qualitative Defect Localization
+![Qualitative Comparison](results/qualitative_comparison.png)
 
-#### Download Visa dataset
-* Follow instructions in https://paperswithcode.com/dataset/visa
+## How to Run
 
-## Run run_winclip.py to reproduce the implementation results
-```
-python run_winclip.py
-```
+**1. Install dependencies:**
 
-## Results
+    pip install open_clip_torch timm loguru scikit-image scikit-learn tqdm
 
-### MVTec-AD
-| MVTec-AD   | Reported |         |          |          | Re-implementation |         |          |          |
-|------------|----------|---------|----------|----------|-------------------|---------|----------|----------|
-|            | i-auroc  | p-auroc | i-max-f1 | p-max-f1 | i-auroc           | p-auroc | i-max-f1 | p-max-f1 |
-| carpet     | 100.00   | 95.40   | 99.40    | 49.70    | 77.41             | 88.96   | 88.44    | 29.31    |
-| grid       | 98.80    | 82.20   | 98.20    | 18.60    | 48.87             | 75.08   | 85.71    | 8.40     |
-| leather    | 100.00   | 96.70   | 100.00   | 39.70    | 97.35             | 97.35   | 95.70    | 29.60    |
-| tile       | 100.00   | 77.60   | 99.40    | 32.60    | 79.87             | 75.87   | 85.25    | 29.30    |
-| wood       | 99.40    | 93.40   | 98.30    | 51.50    | 94.74             | 93.03   | 92.68    | 44.65    |
-| bottle     | 99.20    | 89.50   | 97.60    | 58.10    | 98.65             | 89.58   | 96.77    | 49.36    |
-| cable      | 86.50    | 77.00   | 84.50    | 19.70    | 53.30             | 56.23   | 76.03    | 10.22    |
-| capsule    | 72.90    | 86.90   | 91.40    | 21.70    | 62.03             | 88.56   | 90.46    | 9.95     |
-| hazelnut   | 93.90    | 94.30   | 89.70    | 37.60    | 71.29             | 94.34   | 80.00    | 33.63    |
-| metal_nut  | 97.10    | 61.00   | 96.30    | 32.40    | 37.59             | 42.67   | 89.42    | 21.67    |
-| pill       | 79.10    | 80.00   | 91.60    | 17.60    | 73.10             | 74.67   | 91.56    | 11.98    |
-| screw      | 83.30    | 89.60   | 87.40    | 13.50    | 64.87             | 90.09   | 85.61    | 9.09     |
-| toothbrush | 87.50    | 86.90   | 87.90    | 17.10    | 41.94             | 84.02   | 84.51    | 9.26     |
-| transistor | 88.00    | 74.70   | 79.50    | 30.50    | 62.25             | 67.46   | 60.87    | 15.95    |
-| zipper     | 91.50    | 91.60   | 92.90    | 34.40    | 89.31             | 92.08   | 90.42    | 31.48    |
-| Average    | 91.81    | 85.12   | 92.94    | 31.65    | 70.17             | 80.67   | 86.23    | 22.92    |
+**2. Set dataset path:** Update `MVTEC2D_DIR` in `datasets/mvtec.py` to your local MVTec-AD directory.
 
-### VisA
+**3. Run Original WinCLIP (Baseline):**
 
-| VisA       | Reported |         |          |          | Re-implementation |         |          |          |
-|------------|----------|---------|----------|----------|-------------------|---------|----------|----------|
-|            | i-auroc  | p-auroc | i-max-f1 | p-max-f1 | i-auroc           | p-auroc | i-max-f1 | p-max-f1 |
-| candle     | 95.40    | 88.90   | 89.40    | 22.50    | 79.03             | 86.24   | 72.36    | 6.32     |
-| capsules   | 85.00    | 81.60   | 83.90    | 9.20     | 53.58             | 62.00   | 77.22    | 1.36     |
-| cashew     | 92.10    | 84.70   | 88.40    | 13.20    | 70.66             | 79.54   | 80.99    | 6.94     |
-| chewinggum | 96.50    | 93.30   | 94.80    | 41.10    | 84.94             | 97.01   | 83.76    | 36.17    |
-| fryum      | 80.30    | 88.50   | 82.70    | 22.10    | 52.60             | 86.73   | 80.33    | 15.17    |
-| macaroni1  | 76.20    | 70.90   | 74.20    | 7.00     | 49.98             | 34.37   | 66.67    | 0.07     |
-| macaroni2  | 63.70    | 59.30   | 69.80    | 1.00     | 49.56             | 31.49   | 66.67    | 0.06     |
-| pcb1       | 73.60    | 61.20   | 71.00    | 2.40     | 55.99             | 44.04   | 68.97    | 0.97     |
-| pcb2       | 51.20    | 71.60   | 67.10    | 4.70     | 61.58             | 64.47   | 69.26    | 0.70     |
-| pcb3       | 73.40    | 85.30   | 71.00    | 10.30    | 51.42             | 68.71   | 66.45    | 1.06     |
-| pcb4       | 79.60    | 94.40   | 74.90    | 32.00    | 78.94             | 91.86   | 74.56    | 22.75    |
-| pipe_fryum | 69.70    | 75.40   | 80.70    | 12.30    | 82.80             | 93.65   | 83.48    | 22.45    |
-| Average    | 78.06    | 79.59   | 78.99    | 14.82    | 64.26             | 70.01   | 74.23    | 9.50     |
+    python eval_WinCLIP.py --dataset mvtec --class-name bottle --k-shot 0 --batch-size 1 --vis False --hierarchical False
+
+**4. Run Hierarchical WinCLIP (4x4 -> 3x3 -> 2x2):**
+
+    python eval_WinCLIP.py --dataset mvtec --class-name bottle --k-shot 0 --batch-size 1 --vis False --hierarchical True --h-scales 4 3 2 --keep-ratios 1.0 0.5 0.35 --first-stride 2
+
+## Key Modified / Added Files
+* `WinCLIP/hierarchical.py`: Coarse-to-fine hierarchical window selection and batched per-stage inference.
+* `eval_WinCLIP.py`: Added `--hierarchical`, `--h-scales`, `--keep-ratios`, `--first-stride` CLI arguments and CUDA-synchronized latency benchmarking.
+* `results/`: Quantitative benchmark chart and qualitative side-by-side heatmaps.
 
 ## Acknowledgements
-This project borrows some code from [OpenCLip](https://github.com/mlfoundations/open_clip) and [CDO](https://github.com/caoyunkang/CDO), thanks for their admiring contributions~!
+* Paper: Jeong et al., *WinCLIP: Zero-/Few-Shot Anomaly Classification and Segmentation* (CVPR 2023).
+* Base codebase: [caoyunkang/WinClip](https://github.com/caoyunkang/WinClip).
